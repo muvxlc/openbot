@@ -1,39 +1,36 @@
+<!-- Score: 12 (distinct domain: Cloudflare Worker backend for accounts, auth, hosting, and migrations) -->
 # `apps/auth-api`
 
-The Cloudflare Worker behind accounts, avatars, host configuration, memberships, invitations and
-logical sessions. It never holds chats, files or commands.
+## OVERVIEW
+Cloudflare Worker backend handling accounts, avatars, host configuration, memberships, invitations, and logical sessions; never holds chats, files, or commands.
 
-## Mobile development over LAN
+## STRUCTURE
+```
+apps/auth-api/
+├── migrations/      # D1 SQLite forward-compatible migrations applied pre-deploy
+├── src/server/      # Effect-TS runtime, D1 repository, Stripe and Boat domain services
+├── src/routes/      # TanStack Solid Router API and SSR landing endpoints
+├── src/lib/         # Shared client and server metadata, catalog, and analytics
+├── src/components/  # SolidJS landing and UI presentation components
+└── test/            # Integration and unit tests (vitest)
+```
 
-`dev-network-access.ts` restricts which routes a phone can reach through the Vite dev server.
-When wiring mobile account features, check this allowlist as well as the API handler. Profile,
-avatar reads/writes and account-session list/revocation must be reachable; their handlers still
-enforce authentication. Keep desktop-only sign-in/ticket routes blocked and extend
-`test/dev-network-access.test.ts` with both allowed paths and nearby paths that must stay denied.
+## WHERE TO LOOK
+| Task | Location | Notes |
+|------|----------|-------|
+| Database changes | `migrations/` | Expand-contract schema; backward compatible with active Worker |
+| Backend services | `src/server/` | Effect-TS service layer, D1 queries, Stripe/Boat clients |
+| API endpoints | `src/routes/` | TanStack file routes; server handlers and SSR components |
+| Mobile LAN access | `dev-network-access.ts` | Route allowlist for phone testing via Vite dev server |
 
-## D1 migrations run before the Worker that needs them
+## CONVENTIONS
+- Pre-deploy D1 migrations: CI applies migrations before Worker deployment. All DDL must remain backward compatible with running Worker code (no `NOT NULL` without default, no eager drops/renames).
+- Wrap runtime callbacks: Wrap global `fetch` as `(input, init) => fetch(input, init)` in service bags; bare function changes receiver and triggers `Illegal invocation` in workerd.
+- Mobile dev LAN access: Update `dev-network-access.ts` and `test/dev-network-access.test.ts` when adding mobile-accessible endpoints.
+- Outbox pattern: Profile writes await durable D1 insert; Signal delivery schedules via `waitUntil` with request timeouts; failed delivery stays in retry outbox.
 
-`migrations/` is a second, unrelated database to the user's SQLite in `src/backend`. CI applies
-these migrations **before** deploying the new Worker, so for the length of that gap the old Worker
-is running against the new schema. Every migration must be backward compatible with it: adding a
-`NOT NULL` column without a default, renaming one, or dropping one the deployed Worker still reads
-takes production down between the two steps.
-
-One that cannot be backward compatible needs a test proving the old Worker tolerates the new schema,
-or a two-step release — expand the schema, deploy the Worker that uses it, then contract in a later
-change.
-
-This is a different rule from the one in `src/backend/AGENTS.md`. There, migrations are irreversible
-because they run on the user's own machine with no backup; here they are reversible but *raced*.
-
-## Worker runtime callbacks
-
-Wrap global `fetch` when storing it in a service or dependency object:
-`(input, init) => fetch(input, init)`. Passing the bare function and later calling
-`dependencies.fetch(...)` changes its receiver and throws `Illegal invocation` in workerd,
-even when Node tests pass. The remote account-event outbox covers this receiver constraint;
-keep profile and session notifications on the signed Signal path without polling.
-
-Profile writes await only the durable outbox insert. Schedule Signal delivery with Worker
-`waitUntil`, and bound each webhook request with a timeout so a slow Signal cannot turn a
-successful profile save into a client timeout. Failed delivery stays in the existing retry outbox.
+## ANTI-PATTERNS
+- Never store chat messages, user files, or shell commands in `auth-api`.
+- Never add `NOT NULL` columns without default, rename columns, or drop in-use tables in migrations without two-step release.
+- Never pass unwrapped global `fetch` into service dependency bags.
+- Never allow desktop-only ticket or sign-in routes through LAN allowlist.

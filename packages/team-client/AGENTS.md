@@ -1,20 +1,45 @@
 # `packages/team-client`
 
-`@openbot/team-client` holds the Team connection code that desktop, mobile, and the public web
-client share: the remote directory, the authenticated WebRTC peer, recovery, file transfer, and
-WebRTC framing. It also holds the Dynamic Island state (`dynamic-island-coordinator.ts`), which the
-macOS island and the iOS Live Activity both read, so the two show the same event for the same state.
-It holds the routine schedule (`routine-schedule.ts`) and calendar (`routine-calendar.ts`) too: the
-host fires runs with them, and the desktop and phone calendars place runs with the same code.
-The usage chart series (`usage-series.ts`) is here for the same reason: the desktop and phone usage
-charts draw the same areas.
+<!-- Earned: score 17 (package root, 44 source files, 34 subpath exports, cross-platform boundary) -->
 
-- Do not change the meaning of a shipped wire format. `webrtc-framing.ts` encodes the frames of
-  Team protocol v2, and hosts and clients of older releases still use it. Put a new behaviour behind
-  a new protocol version or capability in `packages/contracts/src/team-protocol`. See
-  [contract rules](../contracts/AGENTS.md).
-- Keep the code independent of Electron, Node, and the DOM beyond WebRTC and `fetch`. Mobile runs it
-  in React Native. Pass platform objects in as arguments, as `TeamClientFetch` does.
-- Do not re-export `@openbot/contracts/team-protocol` from `index.ts`. The comment there says why.
-  Each module has its own subpath in `package.json`.
+## OVERVIEW
+Cross-platform Team client connection, WebRTC framing, RPC dispatch, and shared presentation coordination for desktop, mobile, and web.
+
+## WHERE TO LOOK
+| Task | Location | Notes |
+|------|----------|-------|
+| WebRTC peer lifecycle & channels | `src/remote-peer.ts` | 2.1k LOC; connection state machine, ICE negotiation, data-channel multiplexing |
+| Admin & API RPC requests | `src/team-admin-requests.ts`, `src/team-api-requests.ts` | Connector management, skill installs, routines, context resets |
+| Host directory & pairing | `src/remote-directory.ts` | Host discovery, pairing invitations, key pinning, ticket validation |
+| Wire framing protocol | `src/webrtc-framing.ts` | Team protocol v2 binary frame packing and unpacking |
+| Dynamic Island & Live Activities | `src/dynamic-island-coordinator.ts`, `src/live-activity-props.ts` | macOS status item and iOS widget state reconciliation |
+| Routine scheduling & calendar | `src/routine-schedule.ts`, `src/routine-calendar.ts` | Routine recurrence calculation, UTC civil date handling |
+| Network recovery & retry | `src/remote-recovery.ts` | Exponential backoff coordination; never runs in background |
+| Security sealing & crypto | `src/live-activity-seal.ts`, `src/push-notification-seal.ts`, `src/ed25519.ts` | HMAC/Ed25519 payload signing and verification |
+
+## CONVENTIONS
+- Cross-platform portability: Code MUST stay independent of Electron, Node, and DOM APIs (outside standard WebRTC and `fetch`). Mobile runs it directly in React Native.
+- Dependency injection: Platform-specific globals passed via function arguments (e.g. `TeamClientFetch = typeof globalThis.fetch`).
+- Subpath isolation: Consumers import granular subpaths (`@openbot/team-client/<module>`) rather than a single massive barrel to keep bundle sizes minimal.
+- Structured concurrency: Use `effect` (`runTeamEffect`, `Effect.Effect`) for typed errors and resource lifecycle.
+- Civil date arithmetic: Always use UTC day arithmetic (`routine-calendar-dates.ts`) to avoid DST skew.
+- Route template sanitization: Record route templates with non-word segments replaced by `:id` and query params stripped before storing trace records.
+
+## ANTI-PATTERNS
+- Do not change the meaning of a shipped wire format. `webrtc-framing.ts` encodes Team protocol v2 frames. Put new behavior behind protocol versions in `packages/contracts/src/team-protocol`.
+- Do not re-export `@openbot/contracts/team-protocol` from `index.ts`. Each module has its own subpath in `package.json`.
 - Do not log tokens, tickets, or message bodies.
+- Never store raw request paths, tokens, query parameters, or server error text in trace files or telemetry (`sync-profile.ts`); error codes must be fixed identifier strings.
+- Never populate `reference` with raw server error text in `remote-peer.ts`; use user-copyable error codes only (e.g. `signal/host_busy`).
+- Background time must never trigger network operations in `remote-recovery.ts`.
+- Missed routine occurrences are collapsed, never replayed (`routine-schedule.ts`).
+
+## COMMANDS
+```bash
+bun run --cwd packages/team-client typecheck     # Package typecheck
+bun run typecheck:team-client                   # Root shortcut
+bun run perf:remote                             # Remote sync performance E2E
+bun run test:host-key-rotation                  # Host key rotation E2E
+bun run test:routine-overnight-window           # Overnight routine window E2E
+```
+
